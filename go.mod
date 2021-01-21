@@ -1,4 +1,4 @@
-module github.com/garden4hu/coWatchBenchmark
+module github.com/garden4hu/cowatchbenchmark
 
 go 1.15
 
