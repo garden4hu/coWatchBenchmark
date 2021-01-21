@@ -1,4 +1,4 @@
-package coWatchBenchmark
+package cowatchbenchmark
 
 import (
 	"log"
