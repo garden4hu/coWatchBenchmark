@@ -11,18 +11,18 @@ import (
 	"strings"
 )
 
-func process(conn *websocket.Conn, room *RoomUnit, user *User, ch chan struct{}) error {
+func process(conn *websocket.Conn, room *RoomUnit, user *User, ch chan struct{}) {
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			log.Println("read:", err)
-			return err
+			return
 		}
-		log.Printf("recv: %s", message)
+		// log.Printf("recv: %s", message)
 		if err := processMsg(conn, message, user, room); err != nil {
 			log.Println("[ERR] processMsg err, goroutine will exit")
 			close(ch)
-			return err
+			return
 		}
 	}
 

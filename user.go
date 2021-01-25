@@ -3,6 +3,7 @@ package cowatchbenchmark
 import (
 	"log"
 	"math/rand"
+	"net/http"
 	"net/url"
 	"time"
 
@@ -35,11 +36,19 @@ func (p *User) connect(room *RoomUnit) error {
 		break
 	}
 	start := time.Now()
-	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	dialer := &websocket.Dialer{
+		Proxy:            http.ProxyFromEnvironment,
+		HandshakeTimeout: room.wsTimeout,
+	}
+	conn, _, err := dialer.Dial(u.String(), nil)
 	if err != nil {
 		log.Println("failed to dial websocket:", err)
 		return err
 	}
+	// add user to RoomUnit
+	room.muxUsers.Lock()
+	room.Users = append(room.Users, p)
+	room.muxUsers.Unlock()
 	p.ConnectionDuration = time.Since(start)
 	defer conn.Close()
 	p.isConnected = true

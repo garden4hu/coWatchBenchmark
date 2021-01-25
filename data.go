@@ -10,16 +10,20 @@ type RoomUnit struct {
 	Schema       string
 	Id           string // room ID
 	Password     string
+	httpTimeout  time.Duration
+	wsTimeout    time.Duration
 	PingInterval int // ws/wss
 	PingTimeout  int // ws/wss
 	RtcToken     string
-	Users        []User //users in room
-	UserManager  *userManager
+	muxUsers     sync.Mutex
+	Users        []*User // valid users in room
+
 	// for statistics
 	ConnectionDuration time.Duration
 
 	// for internal usage
 	chanStop           chan bool
+	wg                 sync.WaitGroup
 	start              bool          // start to concurrent request
 	usersCap           int           // users in this room
 	usersOnline        int           // online users
