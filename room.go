@@ -99,6 +99,9 @@ func userRun(r *RoomUnit, u *User) {
 func (p *RoomUnit) GetUsersAvgConnectionDuration() time.Duration {
 	var totalDuration time.Duration = 0
 	usersSize := len(p.Users)
+	if usersSize == 0 {
+		return totalDuration
+	}
 	for i := 0; i < usersSize; i++ {
 		totalDuration += p.Users[i].ConnectionDuration
 	}
