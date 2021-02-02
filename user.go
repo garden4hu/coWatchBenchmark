@@ -17,14 +17,25 @@ func newUser() *User {
 	return &User{client: getUUID(), isConnected: false, readyForMsg: false}
 }
 
-func (p *User) connect(room *RoomUnit) error {
+func (p *User) joinRoom(r *RoomUnit, mode int, ok chan bool) {
+	// if Request user concurrently
+	if mode == 0 {
+		for {
+			if r.start == false {
+				time.Sleep(time.Microsecond * 50)
+				continue
+			}
+			break
+		}
+	}
+
 	v := url.Values{}
 	v.Add("clientId", p.client)
-	v.Add("Password", room.Password)
+	v.Add("Password", r.Password)
 	v.Add("EIO", "3")
 	v.Add("transport", "websocket")
-	u := url.URL{Host: room.Host, Path: "/socket.io/", ForceQuery: true, RawQuery: v.Encode()}
-	switch room.Schema {
+	u := url.URL{Host: r.Host, Path: "/socket.io/", ForceQuery: true, RawQuery: v.Encode()}
+	switch r.Schema {
 	case "http":
 		u.Scheme = "ws"
 		break
@@ -38,34 +49,38 @@ func (p *User) connect(room *RoomUnit) error {
 	start := time.Now()
 	dialer := &websocket.Dialer{
 		Proxy:            http.ProxyFromEnvironment,
-		HandshakeTimeout: room.wsTimeout,
+		HandshakeTimeout: r.wsTimeout,
 	}
 	conn, _, err := dialer.Dial(u.String(), nil)
+	// this
+	if mode != 0 {
+		ok <- true // notify that this goroutine has finish the websocket Request
+	}
 	if err != nil {
 		log.Println("failed to dial websocket:", err)
-		return err
+		return
 	}
 	// add user to RoomUnit
-	room.muxUsers.Lock()
-	room.Users = append(room.Users, p)
-	room.muxUsers.Unlock()
+	r.muxUsers.Lock()
+	r.Users = append(r.Users, p)
+	r.muxUsers.Unlock()
 	p.ConnectionDuration = time.Since(start)
 	defer conn.Close()
 	p.isConnected = true
 	done := make(chan struct{})
-	go process(conn, room, p, done)
+	go process(conn, r, p, done)
 	defer close(done)
-	pingTicker := time.NewTicker(time.Millisecond * time.Duration(room.PingInterval))
-	log.Println("ping ticker duration:", room.PingInterval)
+	pingTicker := time.NewTicker(time.Millisecond * time.Duration(r.PingInterval))
+	log.Println("ping ticker duration:", r.PingInterval)
 	defer pingTicker.Stop()
-	sendMsgTicker := time.NewTicker(room.msgSendingInternal)
+	sendMsgTicker := time.NewTicker(r.msgSendingInternal)
 	defer sendMsgTicker.Stop()
-	log.Println("sending MSG  ticker duration:", room.msgSendingInternal.String())
+	log.Println("sending MSG  ticker duration:", r.msgSendingInternal.String())
 
 	for {
 		select {
 		case <-done:
-			return nil
+			return
 		case _ = <-pingTicker.C:
 			// reset pingTicker and send ping
 			p.Lw.Lock()
@@ -73,21 +88,21 @@ func (p *User) connect(room *RoomUnit) error {
 			p.Lw.Unlock()
 			if err != nil {
 				log.Println("write:", err)
-				return err
+				return
 			}
 			log.Println("sending Ping MSG")
-			pingTicker.Reset(time.Millisecond * time.Duration(room.PingInterval))
+			pingTicker.Reset(time.Millisecond * time.Duration(r.PingInterval))
 			break
 			// sending msg
 		case _ = <-sendMsgTicker.C:
 			if p.readyForMsg {
-				msg := generateMessage(room)
+				msg := generateMessage(r)
 				p.Lw.Lock()
 				_ = conn.WriteMessage(websocket.TextMessage, msg)
 				log.Println("sending msg Frequency:", msg)
 				p.Lw.Unlock()
 			}
-			sendMsgTicker.Reset(room.msgSendingInternal)
+			sendMsgTicker.Reset(r.msgSendingInternal)
 			break
 		}
 	}

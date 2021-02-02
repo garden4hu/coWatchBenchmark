@@ -7,19 +7,18 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 )
 
-/// as is
+// NewRoom return a RoomUnit object
 func NewRoom(host string, httpTimeout time.Duration, wsTimeout time.Duration, maximumUsers, msgLength, frequency int) *RoomUnit {
 	if frequency == 0 {
 		frequency = 10
 	}
-	room := &RoomUnit{usersCap: maximumUsers, msgLength: msgLength, msgSendingInternal: time.Microsecond * time.Duration(1000*1000/frequency)}
+	room := &RoomUnit{usersCap: maximumUsers, msgLength: msgLength, msgSendingInternal: time.Microsecond * time.Duration(60*1000*1000/frequency)}
 	ur, _ := url.Parse(host)
 	room.Schema = ur.Scheme
 	room.Host = ur.Host
@@ -30,7 +29,7 @@ func NewRoom(host string, httpTimeout time.Duration, wsTimeout time.Duration, ma
 	return room
 }
 
-func (p *RoomUnit) RequestServerRoom() error {
+func (p *RoomUnit) Request() error {
 	strings.TrimSuffix(p.Host, "/")
 	uri := p.Schema + "://" + p.Host + "/" + "createRoom"
 	tr := func() *http.Transport {
@@ -42,7 +41,6 @@ func (p *RoomUnit) RequestServerRoom() error {
 	start := time.Now()
 	// construct body
 	body, _ := json.Marshal(CreateRoomReqBody{HostUid: getUUID()})
-	fmt.Println("request body:", string(body))
 	bodyReader := bytes.NewReader(body)
 	resp, err := client.Post(uri, "application/json", bodyReader)
 	if err != nil {
@@ -62,40 +60,37 @@ func (p *RoomUnit) RequestServerRoom() error {
 	return nil
 }
 
-func (p *RoomUnit) CreateUsers(when time.Time) error {
+// UsersConnection try to connect to the server and exchange message.
+// param when is the time for requesting of websocket concurrently
+// param mode is the mode for requesting. 0 means parallel and 1 means serial
+func (p *RoomUnit) UsersConnection(when time.Time, mode int) error {
 	// create Users
+	finish := make(chan bool)
+	defer close(finish)
 	for i := 0; i < p.usersCap; i++ {
 		u := newUser()
-		p.wg.Add(1)
-		go userRun(p, u)
+		if mode == 1 {
+			p.start = true
+		}
+		go u.joinRoom(p, mode, finish)
+		if mode == 1 {
+			_ = <-finish
+		}
 	}
-	now := time.Now()
-	if now.UnixNano() > when.UnixNano() {
-		return errors.New("current time is newer than the schedule time. Operation of creating users will not be executed")
+	if mode == 0 {
+		now := time.Now()
+		if now.UnixNano() > when.UnixNano() {
+			return errors.New("current time is newer than the schedule time. Operation of creating users will not be executed")
+		}
+		time.Sleep(time.Nanosecond * time.Duration(when.UnixNano()-now.UnixNano()))
+		p.start = true
 	}
-	time.Sleep(time.Nanosecond * time.Duration(when.UnixNano()-now.UnixNano()))
-	p.start = true
-	p.wg.Wait()
 	return nil
 }
 
-func userRun(r *RoomUnit, u *User) {
-	defer r.wg.Done()
-	for {
-		if r.start == false {
-			time.Sleep(time.Microsecond * 50)
-			continue
-		}
-		break
-	}
-	// begin to connect the server
-	log.Println("Users try to connect")
-	_ = u.connect(r)
-	// a clock for sending ping
-}
-
 // ---------------------------------------- for statistics --------------------------------------------
-// return the average time consumption of all rooms which are created successfully
+
+// GetUsersAvgConnectionDuration return the average time consumption of all rooms which are created successfully
 func (p *RoomUnit) GetUsersAvgConnectionDuration() time.Duration {
 	var totalDuration time.Duration = 0
 	usersSize := len(p.Users)

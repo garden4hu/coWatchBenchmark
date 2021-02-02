@@ -13,13 +13,13 @@ import (
 func TestRoomUnit_Chat(t *testing.T) {
 	// create r witch server, https
 	r := NewRoom("http://cowatch_server", 25*time.Second, 45*time.Second, 300, 20, 1)
-	if err := r.RequestServerRoom(); err != nil {
-		t.Error("failed to finish RequestServerRoom")
+	if err := r.Request(); err != nil {
+		t.Error("failed to finish Request")
 	}
 	log.SetFlags(0)
 	log.SetOutput(ioutil.Discard)
 	fmt.Println("room Id = ", r.Id)
-	go r.CreateUsers(time.Now().Add(time.Second))
+	go r.UsersConnection(time.Now().Add(time.Second), 0)
 	// pprof
 	go func() {
 		fmt.Println("pprof start...")

@@ -24,7 +24,7 @@ type RoomUnit struct {
 	// for internal usage
 	chanStop           chan bool
 	wg                 sync.WaitGroup
-	start              bool          // start to concurrent request
+	start              bool          // start to concurrent Request
 	usersCap           int           // users in this room
 	usersOnline        int           // online users
 	msgLength          int           // length of message
