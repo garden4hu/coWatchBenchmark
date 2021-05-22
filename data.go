@@ -6,9 +6,10 @@ import (
 )
 
 type RoomUnit struct {
-	Host         string // server+port
+	Address      string // server+port
 	Schema       string
-	Id           string // room ID
+	roomName     string // room name
+	RoomId       int    // room ID
 	Password     string
 	httpTimeout  time.Duration
 	wsTimeout    time.Duration
@@ -17,27 +18,37 @@ type RoomUnit struct {
 	RtcToken     string
 	muxUsers     sync.Mutex
 	Users        []*User // valid users in room
+	AppId        string
+	ExpireTime   int
+	SdkVersion   string
+
+	condMutex *sync.Mutex // used for conditional waiting
+	cond      *sync.Cond
 
 	// for statistics
 	ConnectionDuration time.Duration
+
+	roomManager *RoomManager
 
 	// for internal usage
 	chanStop           chan bool
 	wg                 sync.WaitGroup
 	start              bool          // start to concurrent Request
-	usersCap           int           // users in this room
+	usersCap           int           // users cap in this room
 	usersOnline        int           // online users
 	msgLength          int           // length of message
 	msgSendingInternal time.Duration // Microsecond as the unit
 }
 
 type User struct {
-	client             string     //uuid
-	sid                string     // correspond with client Id
+	name               string     //uuid
+	sid                string     // correspond with name roomName
+	uid                int        // digital id
 	Lw                 sync.Mutex // lock for writing
-	isConnected        bool
+	connected          bool
 	readyForMsg        bool
 	ConnectionDuration time.Duration
+	hostCoWatch        bool // only the user who create the room can be the host
 }
 
 type RequestedUserInfo struct {

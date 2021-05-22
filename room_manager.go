@@ -10,20 +10,31 @@ import (
 // use "log.SetOutput(ioutil.Discard)" in main to disable log output
 
 type RoomManager struct {
-	Addr        string
-	RoomSize    int
-	UserSize    int
-	MsgLen      int
-	Frequency   int
-	LckRoom     sync.Mutex
-	Rooms       []*RoomUnit
-	Start       bool
-	HttpTimeout time.Duration
-	WSTimeout   time.Duration
+	Addr             string
+	RoomSize         int
+	UserSize         int
+	MsgLen           int
+	Frequency        int
+	LckRoom          sync.Mutex
+	Rooms            []*RoomUnit
+	Start            bool
+	HttpTimeout      time.Duration
+	WSTimeout        time.Duration
+	AppID            string
+	SingleClientMode int
+	ParallelRequest  bool
+	NotifyUserAdd    <-chan int // chan 大小为 用户总数
+
+	// for internal usage
+	notifyUserAdd            chan int
+	creatingRoomsOK          bool
+	creatingUsersOK          bool
+	finishedReqRoomRoutines  int
+	finishedReqUsersRoutines int
 }
 
 // NewRoomManager will return a RoomManager
-func NewRoomManager(addr string, room, user, msgLen, frequency, httpTimeout, webSocketTimeout int) *RoomManager {
+func NewRoomManager(addr string, room, user, msgLen, frequency, httpTimeout, webSocketTimeout int, appID string, singleClientMode int, parallel int) *RoomManager {
 	if room < 0 || user < 0 || frequency <= 0 {
 		log.Fatalln("Invalid param")
 		return nil
@@ -37,88 +48,99 @@ func NewRoomManager(addr string, room, user, msgLen, frequency, httpTimeout, web
 	if frequency <= 0 {
 		frequency = 1
 	}
-	return &RoomManager{Addr: addr, RoomSize: room, UserSize: user, MsgLen: msgLen, Frequency: frequency, Start: false, HttpTimeout: time.Second * time.Duration(httpTimeout), WSTimeout: time.Second * time.Duration(webSocketTimeout)}
+	rm := &RoomManager{Addr: addr, RoomSize: room, UserSize: user, MsgLen: msgLen, Frequency: frequency, Start: false, HttpTimeout: time.Second * time.Duration(httpTimeout), WSTimeout: time.Second * time.Duration(webSocketTimeout), AppID: appID, SingleClientMode: singleClientMode, ParallelRequest: parallel == 1}
+	rm.creatingRoomsOK = false
+	rm.creatingUsersOK = false
+	rm.notifyUserAdd = make(chan int, room*user)
+	rm.NotifyUserAdd = rm.notifyUserAdd
+	rm.finishedReqRoomRoutines = 0
+	rm.finishedReqUsersRoutines = 0
+	return rm
+}
+
+func (p *RoomManager) Close() {
+	close(p.notifyUserAdd)
+}
+
+func (p *RoomManager) CheckCreatingRoomsOK() bool {
+	return p.creatingRoomsOK
+}
+
+func (p *RoomManager) CheckCreatingUsersOK() bool {
+	return p.creatingUsersOK
 }
 
 // RequestRoom will request and create a room in server immediately.
 // It will return a valid RoomUnit when the error returned is nil.
-func (p *RoomManager) RequestRoom() (*RoomUnit, error) {
-	r := NewRoom(p.Addr, p.HttpTimeout, p.WSTimeout, p.UserSize, p.MsgLen, p.Frequency)
-	err := r.Request()
-	if err != nil {
-		return nil, err
-	}
-	p.LckRoom.Lock()
-	p.Rooms = append(p.Rooms, r)
-	p.LckRoom.Unlock()
-	return r, nil
-}
+//func (p *RoomManager) RequestRoom() (*RoomUnit, error) {
+//	r := NewRoom(p.Addr, p.HttpTimeout, p.WSTimeout, p.UserSize, p.MsgLen, p.Frequency, p.AppID, p.SingleClientMode)
+//	err := r.Request()
+//	if err != nil {
+//		return nil, err
+//	}
+//	p.LckRoom.Lock()
+//	p.Rooms = append(p.Rooms, r)
+//	p.LckRoom.Unlock()
+//	return r, nil
+//}
 
 // RequestAllRooms will request all the rooms from the server.
-// param when is the start time for Request room from server concurrently.
-// param mode is the mode for Request room. 0 means parallel and 1 means serial
-func (p *RoomManager) RequestAllRooms(when time.Time, mode int) error {
+// param when is the start time for Request room from server concurrently [Only useful when parallel is true]
+// param mode is the mode for Request room. true means parallel and false means serial
+func (p *RoomManager) RequestAllRooms(when time.Time) error {
 	var wg sync.WaitGroup
-	start := false
-	for i := 0; i < p.RoomSize; i++ {
-		wg.Add(1)
-		if mode == 0 {
-			go requestRoom(&wg, p, &start)
+	start := make(chan struct{})
+	for i := 0; i < p.RoomSize; {
+		// all goroutines will send request in the same time
+		if p.ParallelRequest == true {
+			wg.Add(1)
+			go p.requestRoom(&wg, start)
+			i++
 		} else {
-			start = true
-			requestRoom(&wg, p, &start)
+			//  线程创建，为了提高速度，一次创建10个
+			for j := i; j < i+4 && j < p.RoomSize; j++ {
+				go p.RequestRoom()
+			}
+			i += 4
+			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	if mode == 0 {
-		now := time.Now()
-		if now.UnixNano() > when.UnixNano() {
-			return errors.New("current time is newer than the schedule time. Operation of creating rooms will not be executed")
+	if p.ParallelRequest == true && p.SingleClientMode == 0 {
+		if p.SingleClientMode == 0 { // 多台测试主机并发测试，需要等待特定时刻并发请求
+			now := time.Now()
+			if now.UnixNano() > when.UnixNano() {
+				return errors.New("current time is newer than the schedule time. Operation of creating rooms will not be executed")
+			}
+			time.Sleep(time.Nanosecond * time.Duration(when.UnixNano()-now.UnixNano()))
 		}
-		time.Sleep(time.Nanosecond * time.Duration(when.UnixNano()-now.UnixNano()))
-		start = true
 	}
-	wg.Wait()
+
+	close(start) // 开始并发创建请求
+
+	if p.ParallelRequest == true {
+		wg.Wait()
+	}
+	p.creatingRoomsOK = true
 	return nil
 }
 
-// GetCreatingRoomAvgDuration return the average time consumption of all rooms which are created successfully
-func (p *RoomManager) GetCreatingRoomAvgDuration() time.Duration {
-	if len(p.Rooms) == 0 {
-		return time.Duration(0)
+func (p *RoomManager) requestRoom(wg *sync.WaitGroup, start chan struct{}) {
+	r := NewRoom(p.Addr, p.HttpTimeout, p.WSTimeout, p.UserSize, p.MsgLen, p.Frequency, p.AppID, p)
+	if wg != nil {
+		defer wg.Done()
 	}
-	var totalDuration time.Duration = 0
-	for i := 0; i < len(p.Rooms); i++ {
-		totalDuration += p.Rooms[i].ConnectionDuration
+	if p.ParallelRequest {
+		<-start // 需要等待
 	}
-	return time.Duration(int64(totalDuration) / int64(len(p.Rooms)))
+	_ = r.Request()
 }
 
-func (p *RoomManager) GetCreatingUsersAvgDuration() time.Duration {
-	if len(p.Rooms) == 0 {
-		return time.Duration(0)
-	}
-	var totalDuration time.Duration = 0
-	for i := 0; i < len(p.Rooms); i++ {
-		totalDuration += p.Rooms[i].GetUsersAvgConnectionDuration()
-	}
-	return time.Duration(int64(totalDuration) / int64(len(p.Rooms)))
-}
-
-func requestRoom(wg *sync.WaitGroup, rm *RoomManager, start *bool) {
-	defer wg.Done()
-	r := NewRoom(rm.Addr, rm.HttpTimeout, rm.WSTimeout, rm.UserSize, rm.MsgLen, rm.Frequency)
-	for {
-		if *start == false {
-			time.Sleep(time.Millisecond * 20)
-			continue
-		}
-		break
-	}
+func (p *RoomManager) RequestRoom() error {
+	r := NewRoom(p.Addr, p.HttpTimeout, p.WSTimeout, p.UserSize, p.MsgLen, p.Frequency, p.AppID, p)
 	err := r.Request()
 	if err != nil {
-		return
+		return err
 	}
-	rm.LckRoom.Lock()
-	rm.Rooms = append(rm.Rooms, r)
-	rm.LckRoom.Unlock()
+
+	return nil
 }

@@ -1,6 +1,6 @@
 package cowatchbenchmark
 
-// client should not be so complex now.
+// name should not be so complex now.
 // from: https://github.com/eranyanay/1m-go-websockets
 //import (
 //	"github.com/gorilla/websocket"

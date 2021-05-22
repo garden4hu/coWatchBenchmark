@@ -2,30 +2,39 @@ package cowatchbenchmark
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"github.com/gorilla/websocket"
 	"log"
-	"net/url"
 	"strconv"
 	"strings"
 )
 
-func process(conn *websocket.Conn, room *RoomUnit, user *User, ch chan struct{}) {
+// processMessage
+func processMessage(conn *websocket.Conn, room *RoomUnit, user *User, ch chan bool, ctx context.Context) {
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Println("read:", err)
+			log.Println("websocket read:", err)
 			return
 		}
 		// log.Printf("recv: %s", message)
 		if err := processMsg(conn, message, user, room); err != nil {
-			log.Println("[ERR] processMsg err, goroutine will exit")
-			close(ch)
+			log.Println("[ERR] processMsg fatal err, goroutine will exit")
+			ch <- true // 主动退出
 			return
 		}
+		select {
+		case <-ctx.Done():
+			{
+				// 上层取消
+				log.Println("ctx 上层取消")
+				return
+			}
+		default:
+		}
 	}
-
 }
 
 func processMsg(conn *websocket.Conn, b []byte, p *User, room *RoomUnit) error {
@@ -42,14 +51,14 @@ func processMsg(conn *websocket.Conn, b []byte, p *User, room *RoomUnit) error {
 			// process type == 2
 			// _ = processNormalTypeMsg(conn, b, p, room)
 			msg := string(b)
-			if strings.Contains(msg, "REC:hostuid") {
+			if strings.Contains(msg, "REC:chatInit") {
 				p.readyForMsg = true
 			}
 			break
 		case 0:
 			// 40, doesn't contain useful information currently.
 			if len(b) > 2 {
-				msg := "42/" + room.Id + "," + "[\"CMD:name\",\"" + "tempUserName" + "\"]"
+				msg := "42/" + room.roomName + "," + "[\"CMD:name\",\"" + "tempUserName" + "\"]"
 				p.Lw.Lock()
 				if err := conn.WriteMessage(websocket.TextMessage, []byte(msg)); err != nil {
 					log.Println("[ERR] ws failed to send Users name")
@@ -70,16 +79,18 @@ func processMsg(conn *websocket.Conn, b []byte, p *User, room *RoomUnit) error {
 		err := json.Unmarshal(b[1:], userInfo)
 		if err != nil {
 			log.Println("failed to parsed the first message, raw msg:", string(b))
-
 			return err
 		}
 		p.sid = userInfo.Sid
 		room.PingInterval = userInfo.PingInterval
 		room.PingTimeout = userInfo.PingTimeOut
-		v := url.Values{}
-		v.Add("clientId", p.client)
-		v.Add("Password", room.Password)
-		msg := "40/" + room.Id + "?" + v.Encode() + ","
+		msgParam := "uid=" + strconv.Itoa(p.uid) + "&" + "name=" + p.name + "&version=" + room.SdkVersion
+		//v := url.Values{}
+		//v.Add("uid", strconv.Itoa(p.uid))
+		//v.Add("name", p.name)
+		//v.Add("version", room.SdkVersion)
+		// message format : "40/C1LWsXh4jxXsfyK6MQSt?sid=1174252488&name=ddd0&version=1.0.0-7289-integration-b2a92020,"
+		msg := "40/" + room.roomName + "?" + msgParam + ","
 		p.Lw.Lock()
 		if err = conn.WriteMessage(websocket.TextMessage, []byte(msg)); err != nil {
 			log.Println("[ERR] ws failed to send join room msg")
@@ -96,7 +107,7 @@ func processMsg(conn *websocket.Conn, b []byte, p *User, room *RoomUnit) error {
 	return nil
 }
 
-// process message with prefix 42
+// processMessage message with prefix 42
 //func processNormalTypeMsg(conn *websocket.Conn,b []byte, p *User, room *RoomUnit) error{
 //	coreMsg := func() []byte {
 //		i := 0
@@ -128,7 +139,7 @@ func processMsg(conn *websocket.Conn, b []byte, p *User, room *RoomUnit) error {
 //			// we don't need to save these chat messages or even parse then.
 //			break
 //		case "REC:roster":
-//			// format: "Id":"/room_id#user_sid"
+//			// format: "roomName":"/room_id#user_sid"
 //			// same with nameMap. Do not need parse
 //			switch v := v.(type) {
 //			case []interface{}:

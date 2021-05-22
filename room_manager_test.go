@@ -7,8 +7,8 @@ import (
 )
 
 func TestRoomManager_RequestRoomsFromServer(t *testing.T) {
-	rm := NewRoomManager("https://cowatch_server", 3000, 1, 20, 1, 25000, 25000)
-	err := rm.RequestAllRooms(time.Now(), 0)
+	rm := NewRoomManager("https://cowatch_server", 3000, 1, 20, 1, 25000, 25000, "app_id", 1, 1)
+	err := rm.RequestAllRooms(time.Now())
 	if err != nil {
 		t.Errorf(err.Error())
 	}
