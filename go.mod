@@ -1,6 +1,6 @@
 module github.com/garden4hu/cowatchbenchmark
 
-go 1.15
+go 1.16
 
 require (
 	github.com/google/uuid v1.1.4

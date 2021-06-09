@@ -90,6 +90,11 @@ func (p *RoomManager) CheckCreatingUsersOK() bool {
 func (p *RoomManager) RequestAllRooms(when time.Time) error {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
+
+	// for serial request
+	mtx := sync.Mutex{}
+	leftGoroutine := p.RoomSize
+
 	for i := 0; i < p.RoomSize; {
 		// all goroutines will send request in the same time
 		if p.ParallelRequest == true {
@@ -97,12 +102,19 @@ func (p *RoomManager) RequestAllRooms(when time.Time) error {
 			go p.requestRoom(&wg, start)
 			i++
 		} else {
-			//  线程创建，为了提高速度，一次创建10个
-			for j := i; j < i+4 && j < p.RoomSize; j++ {
-				go p.RequestRoom()
+			//  线程创建，为了提高速度，一次创建 8 个
+			for j := i; j < i+8 && j < p.RoomSize; j++ {
+				// go p.RequestRoom()
+				go func() {
+					r := NewRoom(p.Addr, p.HttpTimeout, p.WSTimeout, p.UserSize, p.MsgLen, p.Frequency, p.AppID, p)
+					_ = r.Request()
+					mtx.Lock()
+					leftGoroutine -= 1
+					mtx.Unlock()
+				}()
 			}
-			i += 4
-			time.Sleep(50 * time.Millisecond)
+			i += 8
+			time.Sleep(20 * time.Millisecond)
 		}
 	}
 	if p.ParallelRequest == true && p.SingleClientMode == 0 {
@@ -119,6 +131,10 @@ func (p *RoomManager) RequestAllRooms(when time.Time) error {
 
 	if p.ParallelRequest == true {
 		wg.Wait()
+	} else {
+		for leftGoroutine != 0 {
+			time.Sleep(1 * time.Second)
+		}
 	}
 	p.creatingRoomsOK = true
 	return nil
@@ -132,6 +148,7 @@ func (p *RoomManager) requestRoom(wg *sync.WaitGroup, start chan struct{}) {
 	if p.ParallelRequest {
 		<-start // 需要等待
 	}
+
 	_ = r.Request()
 }
 
@@ -141,6 +158,5 @@ func (p *RoomManager) RequestRoom() error {
 	if err != nil {
 		return err
 	}
-
 	return nil
 }
